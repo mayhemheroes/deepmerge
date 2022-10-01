@@ -1,0 +1,6 @@
+project: deepmerge
+target: always-merge-fuzz
+
+cmds:
+  - cmd: /src/mayhem/fuzz_merge.py
+    libfuzzer: true
