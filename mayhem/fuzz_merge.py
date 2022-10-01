@@ -1,40 +1,62 @@
 #!/usr/bin/python3
-import timeit
 import atheris
 import logging
 import sys
-import pprint
-
-pp = pprint.PrettyPrinter(indent=4)
-
 with atheris.instrument_imports():
     import deepmerge
     import deepmerge.exception
+    import deepmerge.strategy
+
 # No logging
 logging.disable(logging.CRITICAL)
 
 
-# @atheris.instrument_func
+@atheris.instrument_func
+def _shuffle_list(l: list, fdp):
+    import random
+    """Shuffles a list in place using indices from fdp"""
+    for i in reversed(range(1, len(l))):
+        random.shuffle(l, )
+        j = fdp.ConsumeIntInRange(0, i)
+        l[i], l[j] = l[j], l[i]
+
+
+@atheris.instrument_func
 def _get_fuzzed_object(fdp: atheris.FuzzedDataProvider, base_name: str, depth: int = 0) -> dict:
-    fuzzed_object = {}
-    elem_count = fdp.ConsumeIntInRange(1, 5)
+    # Determine if root element should be a list, dict, or set
+    root_ty = fdp.ConsumeIntInRange(0, 2)
+    if root_ty == 0:
+        root = {}
+    elif root_ty == 1:
+        root = []
+    else:
+        root = set()
+
+    elem_count = fdp.ConsumeIntInRange(0, 5)
     try:
         for i in range(elem_count):
-            # Decide if we want to add a list, dict, or concrete value
+            # Decide if we want to add a list, dict, frozenset, or concrete value
             new_val_type = fdp.ConsumeIntInRange(0, 2)
 
             # To avoid a maximum recursion error, we limit the depth of the fuzzed object
-            if depth > 60:
-                new_val_type = 2 # Force a concrete value
+            if depth > 60 or isinstance(root, set):
+                new_val_type = 3  # Force a concrete value
 
             if new_val_type == 0:
                 # Add a new object
                 key_ty = "obj"
                 new_val = _get_fuzzed_object(fdp, base_name, depth + 1)
             elif new_val_type == 1:
-                pass
                 # Add a list
                 key_ty = "list"
+                new_val = []
+                for _ in range(fdp.ConsumeIntInRange(0, 2)):
+                    new_val.append(_get_fuzzed_object(fdp, base_name, depth + 1))
+                if isinstance(root, set):
+                    new_val = tuple(new_val)  # List is not hashable, so we convert it to a tuple
+            elif new_val_type == 2:
+                # Add a frozenset
+                key_ty = "set"
                 new_val = []
                 for _ in range(fdp.ConsumeIntInRange(0, 2)):
                     new_val.append(_get_fuzzed_object(fdp, base_name, depth + 1))
@@ -52,12 +74,16 @@ def _get_fuzzed_object(fdp: atheris.FuzzedDataProvider, base_name: str, depth: i
                 else:
                     new_val = fdp.ConsumeBytes(15)
 
-            # Add the new value to the object
-            key = f"{base_name}_{key_ty}_{depth}_{i}"
-            fuzzed_object[key] = new_val
-        return fuzzed_object
+            if isinstance(root, dict):
+                key = f"{base_name}_{key_ty}_{depth}_{i}"
+                root[key] = new_val
+            elif isinstance(root, list):
+                root.append(new_val)
+            elif isinstance(root, set):
+                root.add(new_val)
+        return root
     except RecursionError:
-        return fuzzed_object
+        return root
 
 
 @atheris.instrument_func
@@ -68,8 +94,35 @@ def TestOneInput(data):
         base = _get_fuzzed_object(fdp, 'a')
         next = _get_fuzzed_object(fdp, 'b')
 
+        # Attempt basic merger
         result = deepmerge.always_merger.merge(base, next)
-        repr(result)
+
+        # Attempt custom merger
+
+        # Shuffle strategies per fuzzer's desire
+        dict_strategies = ['merge', 'override']
+        list_strategies = ['prepend', 'append', 'append_unique', 'override']
+        set_strategies = ['union', 'intersect', 'override']
+
+        _shuffle_list(dict_strategies, fdp)
+        _shuffle_list(list_strategies, fdp)
+        _shuffle_list(set_strategies, fdp)
+
+        type_strategies = [
+            (dict, dict_strategies),
+            (list, list_strategies),
+            (set, set_strategies),
+        ]
+
+        fallback_strategies = ["override", "use_existing"]
+        _shuffle_list(fallback_strategies, fdp)
+
+        type_conflict_strategies = ["override", "use_existing", "override_if_not_empty"]
+        _shuffle_list(type_conflict_strategies, fdp)
+        
+        merger = deepmerge.Merger(type_strategies, fallback_strategies, type_conflict_strategies)
+        merger.merge(base, next)
+
     except deepmerge.exception.DeepMergeException as e:
         pass
 
@@ -77,14 +130,6 @@ def TestOneInput(data):
 def main():
     atheris.Setup(sys.argv, TestOneInput)
     atheris.Fuzz()
-    # with open('/dev/urandom', 'rb') as f:
-    #     for _ in range(300):
-    #         data = f.read(50000)
-    #         fdp = atheris.FuzzedDataProvider(data)
-    #         begin = timeit.default_timer()
-    #         val = _get_fuzzed_object(fdp, 'val')
-    #         end = timeit.default_timer()
-    #         print(f"Time: {end - begin}")
 
 
 if __name__ == "__main__":
