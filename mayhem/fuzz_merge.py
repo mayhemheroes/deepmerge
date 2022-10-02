@@ -39,7 +39,9 @@ def _get_fuzzed_object(fdp: atheris.FuzzedDataProvider, base_name: str, depth: i
             new_val_type = fdp.ConsumeIntInRange(0, 2)
 
             # To avoid a maximum recursion error, we limit the depth of the fuzzed object
-            if depth > 4 or isinstance(root, set):
+            if depth > 4:
+                return root
+            if isinstance(root, set):
                 new_val_type = 3  # Force a concrete value
 
             if new_val_type == 0:
