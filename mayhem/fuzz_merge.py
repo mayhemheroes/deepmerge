@@ -1,11 +1,13 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 import atheris
 import logging
 import sys
+
+import deepmerge.exception
+import deepmerge.strategy
+
 with atheris.instrument_imports():
     import deepmerge
-    import deepmerge.exception
-    import deepmerge.strategy
 
 # No logging
 logging.disable(logging.CRITICAL)
